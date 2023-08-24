@@ -1,0 +1,56 @@
+from pox.core import core
+import pox.openflow.libopenflow_01 as of
+
+class SimplePoxController(object):
+
+    def __init__(self):
+        core.openflow.addListeners(self)
+        self.log_file = open("ip_log.txt", "a")
+        self.logged_ips = {}
+
+    def handle_ConnectionUp(self, event):
+        self.install_flow(event.connection)
+
+    def install_flow(self, connection):
+        msg = of.ofp_flow_mod()
+        msg.match = of.ofp_match()  # Match all packets
+        msg.actions.append(of.ofp_action_output(port=of.OFPP_CONTROLLER))
+        connection.send(msg)
+
+    def log_ip(self, ip, port):
+        if ip in self.logged_ips:
+            if port not in self.logged_ips[ip]:
+                self.logged_ips[ip].append(port)
+                self.log_file.write(ip + "\n")
+        else:
+            self.logged_ips[ip] = [port]
+            self.log_file.write(ip + "\n")
+        self.log_file.flush()
+
+    def check_ip_threshold(self, ip, threshold):
+        if ip in self.logged_ips and len(self.logged_ips[ip]) >= threshold:
+            return True
+        return False
+
+    def redirect_packet(self, connection, packet):
+        src_ip = self.get_source_ip(packet)
+        if self.check_ip_threshold(str(src_ip), 3):
+            msg = of.ofp_flow_mod()
+            msg.match = of.ofp_match()
+            msg.match.dl_type = 0x800
+            msg.match.nw_src = packet.find('ipv4').srcip
+            msg.actions.append(of.ofp_action_dl_addr.set_dst(of.EthAddr("00:00:00:00:00:00")))
+            msg.actions.append(of.ofp_action_nw_addr.set_dst("192.168.242.135"))
+            msg.actions.append(of.ofp_action_output(port=80))
+            connection.send(msg)
+            print("Packet redirected - Source IP: ", src_ip)
+
+    def get_source_ip(self, packet):
+        ip_header = packet.find('ipv4')
+        if ip_header:
+            return ip_header.srcip
+        else:
+            return None
+
+def launch():
+    core.registerNew(SimplePoxController)
